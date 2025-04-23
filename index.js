@@ -11,30 +11,30 @@ import {
     substituteParams,
     generateRaw,
     substituteParamsExtended,
-} from '../../../script.js';
+} from '../../../../script.js';
 import {
     ModuleWorkerWrapper,
     extension_settings,
     getContext,
     modules,
-    renderExtensionTemplateAsync,
     doExtrasFetch, getApiUrl,
     openThirdPartyExtensionMenu,
-} from '../../extensions.js';
-import { collapseNewlines, registerDebugFunction } from '../../power-user.js';
-import { SECRET_KEYS, secret_state, writeSecret } from '../../secrets.js';
-import { getDataBankAttachments, getDataBankAttachmentsForSource, getFileAttachment } from '../../chats.js';
-import { debounce, getStringHash as calculateHash, waitUntilCondition, onlyUnique, splitRecursive, trimToStartSentence, trimToEndSentence, escapeHtml } from '../../utils.js';
-import { debounce_timeout } from '../../constants.js';
-import { getSortedEntries } from '../../world-info.js';
-import { textgen_types, textgenerationwebui_settings } from '../../textgen-settings.js';
-import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
-import { SlashCommand } from '../../slash-commands/SlashCommand.js';
-import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '../../slash-commands/SlashCommandArgument.js';
-import { SlashCommandEnumValue, enumTypes } from '../../slash-commands/SlashCommandEnumValue.js';
-import { slashCommandReturnHelper } from '../../slash-commands/SlashCommandReturnHelper.js';
-import { callGenericPopup, POPUP_RESULT, POPUP_TYPE } from '../../popup.js';
-import { generateWebLlmChatPrompt, isWebLlmSupported } from '../shared.js';
+} from '../../../extensions.js';
+import { renderTemplateAsync } from '../../../templates.js';
+import { collapseNewlines, registerDebugFunction } from '../../../power-user.js';
+import { SECRET_KEYS, secret_state, writeSecret } from '../../../secrets.js';
+import { getDataBankAttachments, getDataBankAttachmentsForSource, getFileAttachment } from '../../../chats.js';
+import { debounce, getStringHash as calculateHash, waitUntilCondition, onlyUnique, splitRecursive, trimToStartSentence, trimToEndSentence, escapeHtml } from '../../../utils.js';
+import { debounce_timeout } from '../../../constants.js';
+import { getSortedEntries } from '../../../world-info.js';
+import { textgen_types, textgenerationwebui_settings } from '../../../textgen-settings.js';
+import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
+import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
+import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '../../../slash-commands/SlashCommandArgument.js';
+import { SlashCommandEnumValue, enumTypes } from '../../../slash-commands/SlashCommandEnumValue.js';
+import { slashCommandReturnHelper } from '../../../slash-commands/SlashCommandReturnHelper.js';
+import { callGenericPopup, POPUP_RESULT, POPUP_TYPE } from '../../../popup.js';
+import { generateWebLlmChatPrompt, isWebLlmSupported } from '../../shared.js';
 import { WebLlmVectorProvider } from './webllm.js';
 
 /**
@@ -44,10 +44,13 @@ import { WebLlmVectorProvider } from './webllm.js';
  * @property {number} index - The index of the message in the chat
  */
 
-const MODULE_NAME = 'vectors';
+const MODULE_NAME = 'cat_vectors';
 
 export const EXTENSION_PROMPT_TAG = '3_vectors';
 export const EXTENSION_PROMPT_TAG_DB = '4_vectors_data_bank';
+
+const extensionName = "SillyTavern-VectorStorage";
+const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
 // Force solo chunks for sources that don't support batching.
 const getBatchSize = () => ['transformers', 'palm', 'ollama'].includes(settings.source) ? 1 : 5;
@@ -75,6 +78,7 @@ const settings = {
     // For chats
     enabled_chats: false,
     template: 'Past events:\n{{text}}',
+    template_divider: '\n\n',
     depth: 2,
     position: extension_prompt_types.IN_PROMPT,
     protect: 5,
@@ -98,6 +102,7 @@ const settings = {
     chunk_count_db: 5,
     overlap_percent_db: 0,
     file_template_db: 'Related information:\n{{text}}',
+    file_template_divider_db: '\n\n',
     file_position_db: extension_prompt_types.IN_PROMPT,
     file_depth_db: 4,
     file_depth_role_db: extension_prompt_roles.SYSTEM,
@@ -142,9 +147,9 @@ async function onVectorizeAllClick() {
         const batchSize = getBatchSize();
         const elapsedLog = [];
         let finished = false;
-        $('#vectorize_progress').show();
-        $('#vectorize_progress_percent').text('0');
-        $('#vectorize_progress_eta').text('...');
+        $('#cat_vectorize_progress').show();
+        $('#cat_vectorize_progress_percent').text('0');
+        $('#cat_vectorize_progress_eta').text('...');
 
         while (!finished) {
             if (is_send_press) {
@@ -166,8 +171,8 @@ async function onVectorizeAllClick() {
             const pace = averageElapsed / batchSize; // time needed to process one item
             const remainingTime = Math.round(pace * remaining / 1000);
 
-            $('#vectorize_progress_percent').text(processedPercent);
-            $('#vectorize_progress_eta').text(remainingTime);
+            $('#cat_vectorize_progress_percent').text(processedPercent);
+            $('#cat_vectorize_progress_eta').text(remainingTime);
 
             if (chatId !== getCurrentChatId()) {
                 throw new Error('Chat changed');
@@ -176,7 +181,7 @@ async function onVectorizeAllClick() {
     } catch (error) {
         console.error('Vectors: Failed to vectorize all', error);
     } finally {
-        $('#vectorize_progress').hide();
+        $('#cat_vectorize_progress').hide();
     }
 }
 
@@ -528,7 +533,7 @@ async function injectDataBankChunks(queryText, collectionIds) {
         for (const collectionId in queryResults) {
             console.debug(`Vectors: Processing Data Bank collection ${collectionId}`, queryResults[collectionId]);
             const metadata = queryResults[collectionId].metadata?.filter(x => x.text)?.sort((a, b) => a.index - b.index)?.map(x => x.text)?.filter(onlyUnique) || [];
-            textResult += metadata.join('\n') + '\n\n';
+            textResult += metadata.join('\n') + settings.file_template_divider_db;
         }
 
         if (!textResult) {
@@ -706,7 +711,7 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
  * @returns {string}
  */
 function getPromptText(queriedMessages) {
-    const queriedText = queriedMessages.map(x => collapseNewlines(`${x.name}: ${x.mes}`).trim()).join('\n\n');
+    const queriedText = queriedMessages.map(x => collapseNewlines(`${x.name}: ${x.mes}`).trim()).join(settings.template_divider);
     console.log('Vectors: relevant past messages found.\n', queriedText);
     return substituteParamsExtended(settings.template, { text: queriedText });
 }
@@ -770,31 +775,31 @@ function getVectorsRequestBody(args = {}) {
             body.extrasKey = extension_settings.apiKey;
             break;
         case 'togetherai':
-            body.model = extension_settings.vectors.togetherai_model;
+            body.model = extension_settings.cat_vectors.togetherai_model;
             break;
         case 'openai':
-            body.model = extension_settings.vectors.openai_model;
+            body.model = extension_settings.cat_vectors.openai_model;
             break;
         case 'cohere':
-            body.model = extension_settings.vectors.cohere_model;
+            body.model = extension_settings.cat_vectors.cohere_model;
             break;
         case 'ollama':
-            body.model = extension_settings.vectors.ollama_model;
+            body.model = extension_settings.cat_vectors.ollama_model;
             body.apiUrl = settings.use_alt_endpoint ? settings.alt_endpoint_url : textgenerationwebui_settings.server_urls[textgen_types.OLLAMA];
-            body.keep = !!extension_settings.vectors.ollama_keep;
+            body.keep = !!extension_settings.cat_vectors.ollama_keep;
             break;
         case 'llamacpp':
             body.apiUrl = settings.use_alt_endpoint ? settings.alt_endpoint_url : textgenerationwebui_settings.server_urls[textgen_types.LLAMACPP];
             break;
         case 'vllm':
             body.apiUrl = settings.use_alt_endpoint ? settings.alt_endpoint_url : textgenerationwebui_settings.server_urls[textgen_types.VLLM];
-            body.model = extension_settings.vectors.vllm_model;
+            body.model = extension_settings.cat_vectors.vllm_model;
             break;
         case 'webllm':
-            body.model = extension_settings.vectors.webllm_model;
+            body.model = extension_settings.cat_vectors.webllm_model;
             break;
         case 'palm':
-            body.model = extension_settings.vectors.google_model;
+            body.model = extension_settings.cat_vectors.google_model;
             break;
         default:
             break;
@@ -1084,9 +1089,9 @@ async function purgeAllVectorIndexes() {
 }
 
 function toggleSettings() {
-    $('#vectors_files_settings').toggle(!!settings.enabled_files);
-    $('#vectors_chats_settings').toggle(!!settings.enabled_chats);
-    $('#vectors_world_info_settings').toggle(!!settings.enabled_world_info);
+    $('#cat_vectors_files_settings').toggle(!!settings.enabled_files);
+    $('#cat_vectors_chats_settings').toggle(!!settings.enabled_chats);
+    $('#cat_vectors_world_info_settings').toggle(!!settings.enabled_world_info);
     $('#together_vectorsModel').toggle(settings.source === 'togetherai');
     $('#openai_vectorsModel').toggle(settings.source === 'openai');
     $('#cohere_vectorsModel').toggle(settings.source === 'cohere');
@@ -1097,7 +1102,7 @@ function toggleSettings() {
     $('#webllm_vectorsModel').toggle(settings.source === 'webllm');
     $('#koboldcpp_vectorsModel').toggle(settings.source === 'koboldcpp');
     $('#google_vectorsModel').toggle(settings.source === 'palm');
-    $('#vector_altEndpointUrl').toggle(vectorApiRequiresUrl.includes(settings.source));
+    $('#cat_vector_altEndpointUrl').toggle(vectorApiRequiresUrl.includes(settings.source));
     if (settings.source === 'webllm') {
         loadWebLlmModels();
     }
@@ -1135,16 +1140,16 @@ async function executeWithWebLlmErrorHandling(func) {
 function loadWebLlmModels() {
     return executeWithWebLlmErrorHandling(() => {
         const models = webllmProvider.getModels();
-        $('#vectors_webllm_model').empty();
+        $('#cat_vectors_webllm_model').empty();
         for (const model of models) {
-            $('#vectors_webllm_model').append($('<option>', { value: model.id, text: model.toString() }));
+            $('#cat_vectors_webllm_model').append($('<option>', { value: model.id, text: model.toString() }));
         }
         if (!settings.webllm_model || !models.some(x => x.id === settings.webllm_model)) {
             if (models.length) {
                 settings.webllm_model = models[0].id;
             }
         }
-        $('#vectors_webllm_model').val(settings.webllm_model);
+        $('#cat_vectors_webllm_model').val(settings.webllm_model);
         return Promise.resolve();
     });
 }
@@ -1253,7 +1258,7 @@ async function onVectorizeAllFilesClick() {
 
         /**
          * Gets the chunk size for a file attachment.
-         * @param file {import('../../chats.js').FileAttachment} File attachment
+         * @param file {import('../../../chats.js').FileAttachment} File attachment
          * @returns {number} Chunk size for the file
          */
         function getChunkSize(file) {
@@ -1275,7 +1280,7 @@ async function onVectorizeAllFilesClick() {
 
         /**
          * Gets the overlap percent for a file attachment.
-         * @param file {import('../../chats.js').FileAttachment} File attachment
+         * @param file {import('../../../chats.js').FileAttachment} File attachment
          * @returns {number} Overlap percent for the file
          */
         function getOverlapPercent(file) {
@@ -1445,8 +1450,8 @@ async function activateWorldInfo(chat) {
 }
 
 jQuery(async () => {
-    if (!extension_settings.vectors) {
-        extension_settings.vectors = settings;
+    if (!extension_settings.cat_vectors) {
+        extension_settings.cat_vectors = settings;
     }
 
     // Migrate from old settings
@@ -1454,38 +1459,38 @@ jQuery(async () => {
         settings.enabled_chats = true;
     }
 
-    Object.assign(settings, extension_settings.vectors);
+    Object.assign(settings, extension_settings.cat_vectors);
 
     // Migrate from TensorFlow to Transformers
     settings.source = settings.source !== 'local' ? settings.source : 'transformers';
-    const template = await renderExtensionTemplateAsync(MODULE_NAME, 'settings');
-    $('#vectors_container').append(template);
-    $('#vectors_enabled_chats').prop('checked', settings.enabled_chats).on('input', () => {
-        settings.enabled_chats = $('#vectors_enabled_chats').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    const template = await renderTemplateAsync(`scripts/extensions/third-party/${extensionName}/settings.html`, {}, true, true, true);
+    $('#extensions_settings2').append(template);
+    $('#cat_vectors_enabled_chats').prop('checked', settings.enabled_chats).on('input', () => {
+        settings.enabled_chats = $('#cat_vectors_enabled_chats').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
         toggleSettings();
     });
-    $('#vectors_enabled_files').prop('checked', settings.enabled_files).on('input', () => {
-        settings.enabled_files = $('#vectors_enabled_files').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_enabled_files').prop('checked', settings.enabled_files).on('input', () => {
+        settings.enabled_files = $('#cat_vectors_enabled_files').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
         toggleSettings();
     });
-    $('#vectors_source').val(settings.source).on('change', () => {
-        settings.source = String($('#vectors_source').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_source').val(settings.source).on('change', () => {
+        settings.source = String($('#cat_vectors_source').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
         toggleSettings();
     });
-    $('#vector_altEndpointUrl_enabled').prop('checked', settings.use_alt_endpoint).on('input', () => {
-        settings.use_alt_endpoint = $('#vector_altEndpointUrl_enabled').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vector_altEndpointUrl_enabled').prop('checked', settings.use_alt_endpoint).on('input', () => {
+        settings.use_alt_endpoint = $('#cat_vector_altEndpointUrl_enabled').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vector_altEndpoint_address').val(settings.alt_endpoint_url).on('change', () => {
-        settings.alt_endpoint_url = String($('#vector_altEndpoint_address').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vector_altEndpoint_address').val(settings.alt_endpoint_url).on('change', () => {
+        settings.alt_endpoint_url = String($('#cat_vector_altEndpoint_address').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
     $('#api_key_nomicai').on('click', async () => {
@@ -1514,233 +1519,244 @@ jQuery(async () => {
         toastr.success('API Key saved');
         saveSettingsDebounced();
     });
-    $('#vectors_togetherai_model').val(settings.togetherai_model).on('change', () => {
-        settings.togetherai_model = String($('#vectors_togetherai_model').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_togetherai_model').val(settings.togetherai_model).on('change', () => {
+        settings.togetherai_model = String($('#cat_vectors_togetherai_model').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_openai_model').val(settings.openai_model).on('change', () => {
-        settings.openai_model = String($('#vectors_openai_model').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_openai_model').val(settings.openai_model).on('change', () => {
+        settings.openai_model = String($('#cat_vectors_openai_model').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_cohere_model').val(settings.cohere_model).on('change', () => {
-        settings.cohere_model = String($('#vectors_cohere_model').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_cohere_model').val(settings.cohere_model).on('change', () => {
+        settings.cohere_model = String($('#cat_vectors_cohere_model').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_ollama_model').val(settings.ollama_model).on('input', () => {
-        settings.ollama_model = String($('#vectors_ollama_model').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_ollama_model').val(settings.ollama_model).on('input', () => {
+        settings.ollama_model = String($('#cat_vectors_ollama_model').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_vllm_model').val(settings.vllm_model).on('input', () => {
-        settings.vllm_model = String($('#vectors_vllm_model').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_vllm_model').val(settings.vllm_model).on('input', () => {
+        settings.vllm_model = String($('#cat_vectors_vllm_model').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_ollama_keep').prop('checked', settings.ollama_keep).on('input', () => {
-        settings.ollama_keep = $('#vectors_ollama_keep').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_ollama_keep').prop('checked', settings.ollama_keep).on('input', () => {
+        settings.ollama_keep = $('#cat_vectors_ollama_keep').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_template').val(settings.template).on('input', () => {
-        settings.template = String($('#vectors_template').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_template').val(settings.template).on('input', () => {
+        settings.template = String($('#cat_vectors_template').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_depth').val(settings.depth).on('input', () => {
-        settings.depth = Number($('#vectors_depth').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_template_divider').val(settings.template_divider).on('input', () => {
+        settings.template_divider = String($('#cat_vectors_template_divider').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_protect').val(settings.protect).on('input', () => {
-        settings.protect = Number($('#vectors_protect').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_depth').val(settings.depth).on('input', () => {
+        settings.depth = Number($('#cat_vectors_depth').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_insert').val(settings.insert).on('input', () => {
-        settings.insert = Number($('#vectors_insert').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_protect').val(settings.protect).on('input', () => {
+        settings.protect = Number($('#cat_vectors_protect').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_query').val(settings.query).on('input', () => {
-        settings.query = Number($('#vectors_query').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_insert').val(settings.insert).on('input', () => {
+        settings.insert = Number($('#cat_vectors_insert').val());
+        Object.assign(extension_settings.cat_vectors, settings);
+        saveSettingsDebounced();
+    });
+    $('#cat_vectors_query').val(settings.query).on('input', () => {
+        settings.query = Number($('#cat_vectors_query').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
     $(`input[name="vectors_position"][value="${settings.position}"]`).prop('checked', true);
     $('input[name="vectors_position"]').on('change', () => {
         settings.position = Number($('input[name="vectors_position"]:checked').val());
-        Object.assign(extension_settings.vectors, settings);
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
-    $('#vectors_vectorize_all').on('click', onVectorizeAllClick);
-    $('#vectors_purge').on('click', onPurgeClick);
-    $('#vectors_view_stats').on('click', onViewStatsClick);
-    $('#vectors_files_vectorize_all').on('click', onVectorizeAllFilesClick);
-    $('#vectors_files_purge').on('click', onPurgeFilesClick);
+    $('#cat_vectors_vectorize_all').on('click', onVectorizeAllClick);
+    $('#cat_vectors_purge').on('click', onPurgeClick);
+    $('#cat_vectors_view_stats').on('click', onViewStatsClick);
+    $('#cat_vectors_files_vectorize_all').on('click', onVectorizeAllFilesClick);
+    $('#cat_vectors_files_purge').on('click', onPurgeFilesClick);
 
-    $('#vectors_size_threshold').val(settings.size_threshold).on('input', () => {
-        settings.size_threshold = Number($('#vectors_size_threshold').val());
-        Object.assign(extension_settings.vectors, settings);
-        saveSettingsDebounced();
-    });
-
-    $('#vectors_chunk_size').val(settings.chunk_size).on('input', () => {
-        settings.chunk_size = Number($('#vectors_chunk_size').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_size_threshold').val(settings.size_threshold).on('input', () => {
+        settings.size_threshold = Number($('#cat_vectors_size_threshold').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_chunk_count').val(settings.chunk_count).on('input', () => {
-        settings.chunk_count = Number($('#vectors_chunk_count').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_chunk_size').val(settings.chunk_size).on('input', () => {
+        settings.chunk_size = Number($('#cat_vectors_chunk_size').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_include_wi').prop('checked', settings.include_wi).on('input', () => {
-        settings.include_wi = !!$('#vectors_include_wi').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_chunk_count').val(settings.chunk_count).on('input', () => {
+        settings.chunk_count = Number($('#cat_vectors_chunk_count').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_summarize').prop('checked', settings.summarize).on('input', () => {
-        settings.summarize = !!$('#vectors_summarize').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_include_wi').prop('checked', settings.include_wi).on('input', () => {
+        settings.include_wi = !!$('#cat_vectors_include_wi').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_summarize_user').prop('checked', settings.summarize_sent).on('input', () => {
-        settings.summarize_sent = !!$('#vectors_summarize_user').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_summarize').prop('checked', settings.summarize).on('input', () => {
+        settings.summarize = !!$('#cat_vectors_summarize').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_summary_source').val(settings.summary_source).on('change', () => {
-        settings.summary_source = String($('#vectors_summary_source').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_summarize_user').prop('checked', settings.summarize_sent).on('input', () => {
+        settings.summarize_sent = !!$('#cat_vectors_summarize_user').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_summary_prompt').val(settings.summary_prompt).on('input', () => {
-        settings.summary_prompt = String($('#vectors_summary_prompt').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_summary_source').val(settings.summary_source).on('change', () => {
+        settings.summary_source = String($('#cat_vectors_summary_source').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_message_chunk_size').val(settings.message_chunk_size).on('input', () => {
-        settings.message_chunk_size = Number($('#vectors_message_chunk_size').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_summary_prompt').val(settings.summary_prompt).on('input', () => {
+        settings.summary_prompt = String($('#cat_vectors_summary_prompt').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_size_threshold_db').val(settings.size_threshold_db).on('input', () => {
-        settings.size_threshold_db = Number($('#vectors_size_threshold_db').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_message_chunk_size').val(settings.message_chunk_size).on('input', () => {
+        settings.message_chunk_size = Number($('#cat_vectors_message_chunk_size').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_chunk_size_db').val(settings.chunk_size_db).on('input', () => {
-        settings.chunk_size_db = Number($('#vectors_chunk_size_db').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_size_threshold_db').val(settings.size_threshold_db).on('input', () => {
+        settings.size_threshold_db = Number($('#cat_vectors_size_threshold_db').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_chunk_count_db').val(settings.chunk_count_db).on('input', () => {
-        settings.chunk_count_db = Number($('#vectors_chunk_count_db').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_chunk_size_db').val(settings.chunk_size_db).on('input', () => {
+        settings.chunk_size_db = Number($('#cat_vectors_chunk_size_db').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_overlap_percent').val(settings.overlap_percent).on('input', () => {
-        settings.overlap_percent = Number($('#vectors_overlap_percent').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_chunk_count_db').val(settings.chunk_count_db).on('input', () => {
+        settings.chunk_count_db = Number($('#cat_vectors_chunk_count_db').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_overlap_percent_db').val(settings.overlap_percent_db).on('input', () => {
-        settings.overlap_percent_db = Number($('#vectors_overlap_percent_db').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_overlap_percent').val(settings.overlap_percent).on('input', () => {
+        settings.overlap_percent = Number($('#cat_vectors_overlap_percent').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_file_template_db').val(settings.file_template_db).on('input', () => {
-        settings.file_template_db = String($('#vectors_file_template_db').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_overlap_percent_db').val(settings.overlap_percent_db).on('input', () => {
+        settings.overlap_percent_db = Number($('#cat_vectors_overlap_percent_db').val());
+        Object.assign(extension_settings.cat_vectors, settings);
+        saveSettingsDebounced();
+    });
+
+    $('#cat_vectors_file_template_db').val(settings.file_template_db).on('input', () => {
+        settings.file_template_db = String($('#cat_vectors_file_template_db').val());
+        Object.assign(extension_settings.cat_vectors, settings);
+        saveSettingsDebounced();
+    });
+
+    $('#cat_vectors_file_template_divider_db').val(settings.file_template_divider_db).on('input', () => {
+        settings.file_template_divider_db = String($('#cat_vectors_file_template_divider_db').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
     $(`input[name="vectors_file_position_db"][value="${settings.file_position_db}"]`).prop('checked', true);
     $('input[name="vectors_file_position_db"]').on('change', () => {
         settings.file_position_db = Number($('input[name="vectors_file_position_db"]:checked').val());
-        Object.assign(extension_settings.vectors, settings);
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_file_depth_db').val(settings.file_depth_db).on('input', () => {
-        settings.file_depth_db = Number($('#vectors_file_depth_db').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_file_depth_db').val(settings.file_depth_db).on('input', () => {
+        settings.file_depth_db = Number($('#cat_vectors_file_depth_db').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_file_depth_role_db').val(settings.file_depth_role_db).on('input', () => {
-        settings.file_depth_role_db = Number($('#vectors_file_depth_role_db').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_file_depth_role_db').val(settings.file_depth_role_db).on('input', () => {
+        settings.file_depth_role_db = Number($('#cat_vectors_file_depth_role_db').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_translate_files').prop('checked', settings.translate_files).on('input', () => {
-        settings.translate_files = !!$('#vectors_translate_files').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_translate_files').prop('checked', settings.translate_files).on('input', () => {
+        settings.translate_files = !!$('#cat_vectors_translate_files').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_enabled_world_info').prop('checked', settings.enabled_world_info).on('input', () => {
-        settings.enabled_world_info = !!$('#vectors_enabled_world_info').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_enabled_world_info').prop('checked', settings.enabled_world_info).on('input', () => {
+        settings.enabled_world_info = !!$('#cat_vectors_enabled_world_info').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
         toggleSettings();
     });
 
-    $('#vectors_enabled_for_all').prop('checked', settings.enabled_for_all).on('input', () => {
-        settings.enabled_for_all = !!$('#vectors_enabled_for_all').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_enabled_for_all').prop('checked', settings.enabled_for_all).on('input', () => {
+        settings.enabled_for_all = !!$('#cat_vectors_enabled_for_all').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_max_entries').val(settings.max_entries).on('input', () => {
-        settings.max_entries = Number($('#vectors_max_entries').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_max_entries').val(settings.max_entries).on('input', () => {
+        settings.max_entries = Number($('#cat_vectors_max_entries').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_score_threshold').val(settings.score_threshold).on('input', () => {
-        settings.score_threshold = Number($('#vectors_score_threshold').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_score_threshold').val(settings.score_threshold).on('input', () => {
+        settings.score_threshold = Number($('#cat_vectors_score_threshold').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_force_chunk_delimiter').val(settings.force_chunk_delimiter).on('input', () => {
-        settings.force_chunk_delimiter = String($('#vectors_force_chunk_delimiter').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_force_chunk_delimiter').val(settings.force_chunk_delimiter).on('input', () => {
+        settings.force_chunk_delimiter = String($('#cat_vectors_force_chunk_delimiter').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_only_custom_boundary').prop('checked', settings.only_custom_boundary).on('input', () => {
-        settings.only_custom_boundary = !!$('#vectors_only_custom_boundary').prop('checked');
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_only_custom_boundary').prop('checked', settings.only_custom_boundary).on('input', () => {
+        settings.only_custom_boundary = !!$('#cat_vectors_only_custom_boundary').prop('checked');
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_ollama_pull').on('click', (e) => {
-        const presetModel = extension_settings.vectors.ollama_model || '';
+    $('#cat_vectors_ollama_pull').on('click', (e) => {
+        const presetModel = extension_settings.cat_vectors.ollama_model || '';
         e.preventDefault();
         $('#ollama_download_model').trigger('click');
         $('#dialogue_popup_input').val(presetModel);
     });
 
-    $('#vectors_webllm_install').on('click', (e) => {
+    $('#cat_vectors_webllm_install').on('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
 
@@ -1752,21 +1768,21 @@ jQuery(async () => {
         openThirdPartyExtensionMenu('https://github.com/SillyTavern/Extension-WebLLM');
     });
 
-    $('#vectors_webllm_model').on('input', () => {
-        settings.webllm_model = String($('#vectors_webllm_model').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_webllm_model').on('input', () => {
+        settings.webllm_model = String($('#cat_vectors_webllm_model').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
-    $('#vectors_webllm_load').on('click', async () => {
+    $('#cat_vectors_webllm_load').on('click', async () => {
         if (!settings.webllm_model) return;
         await webllmProvider.loadModel(settings.webllm_model);
         toastr.success('WebLLM model loaded');
     });
 
-    $('#vectors_google_model').val(settings.google_model).on('input', () => {
-        settings.google_model = String($('#vectors_google_model').val());
-        Object.assign(extension_settings.vectors, settings);
+    $('#cat_vectors_google_model').val(settings.google_model).on('input', () => {
+        settings.google_model = String($('#cat_vectors_google_model').val());
+        Object.assign(extension_settings.cat_vectors, settings);
         saveSettingsDebounced();
     });
 
