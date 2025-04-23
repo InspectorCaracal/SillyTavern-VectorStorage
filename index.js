@@ -528,13 +528,16 @@ async function injectDataBankChunks(queryText, collectionIds) {
     try {
         const queryResults = await queryMultipleCollections(collectionIds, queryText, settings.chunk_count_db, settings.score_threshold);
         console.debug(`Vectors: Retrieved ${collectionIds.length} Data Bank collections`, queryResults);
-        let textResult = '';
+        let collectedText = [];
 
         for (const collectionId in queryResults) {
             console.debug(`Vectors: Processing Data Bank collection ${collectionId}`, queryResults[collectionId]);
             const metadata = queryResults[collectionId].metadata?.filter(x => x.text)?.sort((a, b) => a.index - b.index)?.map(x => x.text)?.filter(onlyUnique) || [];
-            textResult += metadata.join('\n') + settings.file_template_divider_db;
+            if (metadata) {
+                collectedText.push(metadata.join('\n'));
+            }
         }
+        let textResult = collectedText.join(settings.file_template_divider_db);
 
         if (!textResult) {
             console.debug('Vectors: No Data Bank chunks found');
